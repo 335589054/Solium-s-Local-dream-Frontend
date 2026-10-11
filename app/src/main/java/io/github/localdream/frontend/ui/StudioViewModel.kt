@@ -281,6 +281,8 @@ class StudioViewModel(
 
     fun removeCategory(path: String) = promptLibrary.removeCategory(path)
 
+    fun sortTagLibraryAlphabetically() = promptLibrary.sortAlphabetically()
+
     fun saveCombo(name: String) {
         val snapshot = _state.value
         promptLibrary.addCombo(name, snapshot.positivePrompt, snapshot.negativePrompt)

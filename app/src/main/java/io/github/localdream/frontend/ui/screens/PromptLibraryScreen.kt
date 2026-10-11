@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -229,7 +230,7 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                         }
                     }
                     Text(
-                        "导入后自动按分类、再按字母顺序排好；当前共 ${library.tags.size} 个标签，${library.combos.size} 条收藏",
+                        "导入按原文件顺序保留 —— 标签文件通常按常用度排列，比字母序更好用；想改成字母序，可在下方标签库右上角手动触发。当前共 ${library.tags.size} 个标签，${library.combos.size} 条收藏",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -300,6 +301,7 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                         studio.notify("已复制：${tag.en}")
                     },
                     onDeleteRequest = { confirm = it },
+                    onSortAlphabetically = { studio.sortTagLibraryAlphabetically() },
                 )
             }
         }
@@ -429,6 +431,7 @@ private fun TagBrowserCard(
     onSelectedChange: (Set<PromptTag>) -> Unit,
     onTagClick: (PromptTag) -> Unit,
     onDeleteRequest: (Confirm) -> Unit,
+    onSortAlphabetically: () -> Unit,
 ) {
     val currentPath = path.joinToString("/").ifEmpty { null }
     val branches = remember(library.tags, currentPath) { library.subCategoriesOf(currentPath) }
@@ -450,6 +453,15 @@ private fun TagBrowserCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("标签库", style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.weight(1f))
+                TextButton(onClick = onSortAlphabetically) {
+                    Icon(
+                        Icons.Filled.Sort,
+                        contentDescription = null,
+                        modifier = Modifier.width(16.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("按字母重排")
+                }
                 if (currentPath != null) {
                     TextButton(onClick = {
                         onDeleteRequest(Confirm.DeleteCategory(currentPath, library.tagsUnder(currentPath).size))

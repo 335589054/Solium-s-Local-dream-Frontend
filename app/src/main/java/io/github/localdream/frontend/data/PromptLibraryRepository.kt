@@ -34,7 +34,9 @@ class PromptLibraryRepository(
             return 0
         }
         val before = _library.value.tags.size
-        val merged = sortTags((_library.value.tags + parsed.tags).distinctBy { it.category to it.en })
+        // Keep the incoming order: tag files are normally sorted by how common
+        // each tag is, which is more useful than alphabetical.
+        val merged = (_library.value.tags + parsed.tags).distinctBy { it.category to it.en }
         _library.value = _library.value.copy(tags = merged)
         persist()
         val added = merged.size - before
@@ -60,7 +62,7 @@ class PromptLibraryRepository(
         val cat = category.trim().replace('／', '/').trim('/').ifEmpty { TagListParser.UNCATEGORIZED }
         if (_library.value.tags.any { it.en == english && it.category == cat }) return
         _library.value = _library.value.copy(
-            tags = sortTags(_library.value.tags + PromptTag(cat, zh.trim(), english)),
+            tags = _library.value.tags + PromptTag(cat, zh.trim(), english),
         )
         persist()
         log.info(TAG, "新增标签：$english（$cat）")
@@ -94,9 +96,19 @@ class PromptLibraryRepository(
         log.info(TAG, "已清空标签库")
     }
 
-    /** Keeps the library alphabetical so imported and manual entries interleave. */
-    private fun sortTags(tags: List<PromptTag>): List<PromptTag> =
-        tags.sortedWith(compareBy({ it.category }, { it.en.lowercase() }))
+    /**
+     * Re-sorts the whole library alphabetically, at the user's request. Imports
+     * keep the source file's own order by default, since tag files are normally
+     * ordered by how common each tag is.
+     */
+    fun sortAlphabetically() {
+        val before = _library.value.tags
+        val sorted = before.sortedWith(compareBy({ it.category }, { it.en.lowercase() }))
+        if (sorted == before) return
+        _library.value = _library.value.copy(tags = sorted)
+        persist()
+        log.info(TAG, "已按分类与字母顺序重排 ${sorted.size} 个标签")
+    }
 
     fun addCombo(name: String, positive: String, negative: String) {
         val combo = PromptCombo(

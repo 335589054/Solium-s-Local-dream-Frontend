@@ -125,18 +125,15 @@ fun TagPicker(
             }.distinct().sorted()
         }
 
+        // No "全部" entry: the first sub-category is active by default, which is
+        // how the source library is meant to be browsed.
+        val activeSub = subPath?.takeIf { it in subCategories } ?: subCategories.firstOrNull()
+
         if (subCategories.isNotEmpty()) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                item {
-                    FilterChip(
-                        selected = subPath == null,
-                        onClick = { subPath = null },
-                        label = { Text("全部") },
-                    )
-                }
                 items(subCategories) { full ->
                     FilterChip(
-                        selected = subPath == full,
+                        selected = activeSub == full,
                         onClick = { subPath = full },
                         label = { Text(full.substringAfter('/')) },
                     )
@@ -144,10 +141,10 @@ fun TagPicker(
             }
         }
 
-        val visible = remember(tags, currentTop, subPath) {
+        val visible = remember(tags, currentTop, activeSub) {
             when {
                 currentTop == null -> emptyList()
-                subPath != null -> tags.filter { it.category == subPath }
+                activeSub != null -> tags.filter { it.category == activeSub }
                 else -> tags.filter {
                     it.category == currentTop || it.category.startsWith("$currentTop/")
                 }

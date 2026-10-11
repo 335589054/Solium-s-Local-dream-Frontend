@@ -31,7 +31,9 @@ foreach ($l in (Get-Content $src -Encoding UTF8)) {
     $rows.Add([PSCustomObject]@{ Cat = $cat; Zh = $zh; En = $en })
 }
 
-$lines = $rows | Sort-Object Cat, En | ForEach-Object { "$($_.Cat) | $($_.Zh) | $($_.En)" }
+# 保持源文件顺序：源库是按常用度排列的（比如"上衣"很靠前），
+# 按字母重排会把这些常用标签挤到很后面
+$lines = $rows | ForEach-Object { "$($_.Cat) | $($_.Zh) | $($_.En)" }
 [System.IO.File]::WriteAllLines($out, $lines, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Output "总共写入 $($lines.Count) 条"
