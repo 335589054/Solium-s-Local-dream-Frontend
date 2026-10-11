@@ -45,15 +45,28 @@ class PromptLibraryRepository(
     }
 
     /**
-     * Installs the starter library that ships inside the APK, so a fresh install
-     * has something to pick from without pasting thousands of lines by hand.
+     * Installs the library that ships inside the APK.
+     *
+     * This replaces the whole tag set instead of merging: importing the bundled
+     * file is a "restore the default library" action, and a merge would keep the
+     * previous order and hide the new file's ordering entirely.
      */
-    fun importBundledTags(): Int = runCatching {
-        val text = context.assets.open(BUNDLED_TAGS).bufferedReader().use { it.readText() }
-        importTags(text)
-    }.getOrElse {
-        log.error(TAG, "内置标签库读取失败：${it.message}")
-        0
+    fun importBundledTags(): Int {
+        val text = runCatching {
+            context.assets.open(BUNDLED_TAGS).bufferedReader().use { it.readText() }
+        }.getOrElse {
+            log.error(TAG, "内置标签库读取失败：${it.message}")
+            return 0
+        }
+        val parsed = TagListParser.parse(text)
+        if (parsed.tags.isEmpty()) {
+            log.warn(TAG, "内置标签库解析为空")
+            return 0
+        }
+        _library.value = _library.value.copy(tags = parsed.tags)
+        persist()
+        log.info(TAG, "导入内置标签库 ${parsed.tags.size} 条")
+        return parsed.tags.size
     }
 
     fun addTag(category: String, zh: String, en: String) {
@@ -97,17 +110,23 @@ class PromptLibraryRepository(
     }
 
     /**
-     * Re-sorts the whole library alphabetically, at the user's request. Imports
-     * keep the source file's own order by default, since tag files are normally
-     * ordered by how common each tag is.
+     * Writes back a user-arranged order for the tags that sit directly in one
+     * category. The reordered list keeps the same slots in the global list, so
+     * tags belonging to other categories never move.
      */
-    fun sortAlphabetically() {
+    fun reorderCategory(path: String, reordered: List<PromptTag>) {
         val before = _library.value.tags
-        val sorted = before.sortedWith(compareBy({ it.category }, { it.en.lowercase() }))
-        if (sorted == before) return
-        _library.value = _library.value.copy(tags = sorted)
+        val slots = before.indices.filter { before[it].category == path }
+        if (slots.size != reordered.size) {
+            log.warn(TAG, "排序结果与「$path」的标签数不一致，已忽略")
+            return
+        }
+        val next = before.toMutableList()
+        slots.forEachIndexed { i, slot -> next[slot] = reordered[i] }
+        if (next == before) return
+        _library.value = _library.value.copy(tags = next)
         persist()
-        log.info(TAG, "已按分类与字母顺序重排 ${sorted.size} 个标签")
+        log.info(TAG, "「$path」的标签顺序已更新")
     }
 
     fun addCombo(name: String, positive: String, negative: String) {
