@@ -12,3 +12,7 @@
 *.aab
 *.keystore
 !debug.keystore
+
+# 第三方原始标签数据，体积大且可从上游重新拉取；
+# 由 prompt-library/_src/build-tags.ps1 抓取并生成 localdream-tags.txt
+prompt-library/_src/*.yaml

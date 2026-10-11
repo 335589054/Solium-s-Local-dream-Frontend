@@ -13,6 +13,7 @@ import io.github.localdream.frontend.data.LogRepository
 import io.github.localdream.frontend.data.MessageRepository
 import io.github.localdream.frontend.data.ModelPresetRepository
 import io.github.localdream.frontend.data.PromptLibraryRepository
+import io.github.localdream.frontend.data.PromptTag
 import io.github.localdream.frontend.data.PromptToken
 import io.github.localdream.frontend.data.PromptTokens
 import io.github.localdream.frontend.data.SettingsRepository
@@ -270,9 +271,15 @@ class StudioViewModel(
 
     fun importTags(text: String): Int = promptLibrary.importTags(text)
 
+    fun importBundledTags(): Int = promptLibrary.importBundledTags()
+
     fun clearTagLibrary() = promptLibrary.clearTags()
 
     fun addTag(category: String, zh: String, en: String) = promptLibrary.addTag(category, zh, en)
+
+    fun removeTags(tags: Collection<PromptTag>) = promptLibrary.removeTags(tags)
+
+    fun removeCategory(path: String) = promptLibrary.removeCategory(path)
 
     fun saveCombo(name: String) {
         val snapshot = _state.value

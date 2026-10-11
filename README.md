@@ -14,7 +14,11 @@
   - 点标签加一层括号 `(tag)` / `((tag))`，点 `×` 减一层，减完即移除
   - 概览框只显示拼接结果，点击弹出完整编辑器
   - 从文本框粘贴带括号的提示词，权重会被正确解析回来
-- **提示词标签库**：按分类浏览，点选即插入；已加入当前字段的标签高亮打勾
+- **提示词标签库**：最多三级的分类树（如 `人物/脸部/眼睛`），逐级下钻浏览；有子分类的分支下，直接挂着的标签会归入「未分类」一栏
+  - 点选即插入，已加入当前字段的标签高亮打勾
+  - 已选标签可用括号加权：点标签加一层 `(tag)`，点 `×` 减一层
+- **内置词库**：随包附带 **3981 条**中英对照标签，一键导入即可用
+- **库管理**：单个删除、长按多选批量删除、按分类整片删除、一键清空；导入后自动按分类与字母序排列
 - **img2img**：选择底图 + 重绘强度
 - **预设分辨率**：只提供后端支持的画布尺寸，避免生成失败
 - **生成后自动超分**：可选，完成后自动送往放大器再返回
@@ -210,6 +214,12 @@ app/src/main/java/io/github/localdream/frontend/
 
 - [xororz/local-dream](https://github.com/xororz/local-dream) — 后端本体（Android 本地推理）
 - [AUTOMATIC1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) — WebUI 接口规范参考
+
+## 数据来源
+
+内置的中英对照标签库摘自 [Physton/sd-webui-prompt-all-in-one](https://github.com/Physton/sd-webui-prompt-all-in-one) 的 `group_tags/zh_CN.yaml`，由脚本 `prompt-library/_src/build-tags.ps1` 转换成 `分类 | 中文 | 英文` 的行格式。
+
+原文说明其翻译来自机器翻译，可能有不准确之处，介意的话可以自己用 AI 模板重新整理一份导入。
 
 ## 许可证
 

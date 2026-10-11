@@ -6,14 +6,24 @@ import java.util.UUID
  * A single selectable label from the prompt library.
  *
  * [en] is what actually gets inserted into the prompt (Stable Diffusion tags
- * are English), while [zh] is the Chinese gloss shown for readability and
- * [category] groups tags into tabs.
+ * are English), while [zh] is the Chinese gloss shown for readability.
+ *
+ * [category] is a `/`-separated path of up to three levels, e.g.
+ * `人物/脸部/眼睛`. Browsing walks that tree one level at a time, and tags that
+ * sit directly on a branch which also has sub-branches are grouped under
+ * `未分类` when that branch is open.
  */
 data class PromptTag(
     val category: String,
     val zh: String,
     val en: String,
-)
+) {
+    /** Path split into its levels. */
+    val levels: List<String> get() = category.split('/').filter { it.isNotBlank() }
+
+    /** How deep this tag sits, 1 for a top-level category. */
+    val depth: Int get() = levels.size
+}
 
 /** A saved, reusable full prompt (positive + negative). */
 data class PromptCombo(
@@ -28,9 +38,39 @@ data class PromptLibrary(
     val tags: List<PromptTag> = emptyList(),
     val combos: List<PromptCombo> = emptyList(),
 ) {
-    val categories: List<String> get() = tags.map { it.category }.distinct().sorted()
+    /** Top-level categories, alphabetically. */
+    val categories: List<String>
+        get() = tags.mapNotNull { it.levels.firstOrNull() }.distinct().sorted()
+
+    /** Alias kept for the picker, which browses a flat list of paths. */
+    val categoryPaths: List<String> get() = categories
+
+    /**
+     * Names of the branches directly under [path]; the top level when [path] is
+     * blank. Tags hanging directly off [path] do not count as branches.
+     */
+    fun subCategoriesOf(path: String?): List<String> {
+        val prefix = if (path.isNullOrBlank()) "" else "$path/"
+        return tags.mapNotNull { tag ->
+            if (!tag.category.startsWith(prefix)) return@mapNotNull null
+            val rest = tag.category.removePrefix(prefix)
+            if (rest.isEmpty()) return@mapNotNull null
+            rest.substringBefore('/').takeIf { it.isNotEmpty() }
+        }.distinct().sorted()
+    }
+
+    /** Tags sitting exactly on [path], i.e. without a further sub-branch. */
+    fun directTagsOf(path: String?): List<PromptTag> =
+        if (path.isNullOrBlank()) emptyList() else tags.filter { it.category == path }
+
+    /** Tags on [path] and everything below it. */
+    fun tagsUnder(path: String): List<PromptTag> =
+        tags.filter { it.category == path || it.category.startsWith("$path/") }
 
     fun tagsIn(category: String): List<PromptTag> = tags.filter { it.category == category }
+
+    /** True when opening [path] should show branches, not just a tag grid. */
+    fun hasBranches(path: String): Boolean = subCategoriesOf(path).isNotEmpty()
 }
 
 /**
@@ -44,9 +84,25 @@ object TagTemplate {
 
 1. 每行一个标签，用竖线分隔，顺序固定为：分类 | 中文 | 英文
 2. 只输出这些数据行，不要表头、不要序号、不要 Markdown 表格、不要任何解释或空行
-3. 英文必须使用 Stable Diffusion / Danbooru 通用的英文标签写法，如 1girl、smile、depth of field
-4. 中文是该标签准确简短的释义
-5. 分类请自行归类，例如：人物、外貌、服饰、动作、表情、场景、光影、氛围、风格、画质
+3. 分类写成「一级/二级」的形式，斜杠分隔，例如：人物/眼睛、服饰/裙子、场景/城市
+4. 分类只能从下面这份清单里选，不要自创：
+人物/ 对象、身份、二次元角色、年龄、皮肤、身材、脸型、头发、面部、耳朵、眉毛、眼睛、瞳孔、鼻子、嘴巴、牙齿、舌头、指甲、肩部、胸部、腰部、腹部、翅膀
+服饰/ 正装、风格、休闲装、运动服、泳装、制服、上衣、外套、腰部、盔甲、裙子、与裙子互动、裤子、与裤子互动、袜子、与袜子互动、材质、装饰、花纹、鞋子、靴子、鞋底、领口、围巾、眼镜、面具、手臂、手、手套、耳饰、头饰、帽子、发饰、小装饰、首饰
+表情动作/ 笑、哭、不开心、蔑视、生气、其他表情、基础动作、手部动作、腿部动作、其他动作
+画面/ 画质、艺术风格、艺术类型、艺术派系、艺术家风格、光照、写实、素描、画笔、颜色、背景
+环境/ 季节、天气、大自然、水、天空、云、氛围
+场景/ 室外、城市、室内、地板、家具、床上用品、浴室
+物品/ 学习用品、数码设备、餐具、乐器、其它物品、武器、食物、动物、植物
+镜头/ 镜头、特写镜头、其他构图、镜头角度、效果、主角动作
+汉服/ 唐风、宋风、明风、上衣、裙子、领子、装饰
+反向提示词/ 画面、人、Embeddings
+5. 英文必须使用 Stable Diffusion / Danbooru 通用写法，小写、多词之间用下划线，如 1girl、blue_eyes、depth_of_field
+6. 中文是该标签准确简短的释义
+
+示例：
+人物/眼睛 | 蓝眼睛 | blue_eyes
+服饰/裙子 | 百褶裙 | pleated_skirt
+反向提示词/画面 | 低画质 | low_quality
 
 需要整理的提示词：
 （把你要整理的中文或英文词粘贴到这里）"""
@@ -75,11 +131,17 @@ object TagListParser {
         val seen = mutableSetOf<String>()
         var skipped = 0
 
-        text.lineSequence().forEach { rawLine ->
+        // A file saved by a Windows editor often carries a UTF-8 BOM, which
+        // would otherwise glue itself onto the first category name.
+        text.removePrefix("\uFEFF").lineSequence().forEach { rawLine ->
             val line = rawLine.trim()
             if (line.isEmpty() || line.startsWith("#")) return@forEach
 
-            val parts = line.split(*separators).map { it.trim() }.filter { it.isNotEmpty() }
+            // Split and trim, but keep empty middle columns: a row such as
+            // "分类 |  | blue_eyes" is still a valid three-column entry whose
+            // translation is simply missing. Only trailing empties (a stray
+            // separator at the end of the line) are dropped.
+            val parts = line.split(*separators).map { it.trim() }.dropLastWhile { it.isEmpty() }
             // Drop a header row like "分类 | 中文 | 英文" if the assistant adds one.
             if (parts.isEmpty() || isHeader(parts[0])) return@forEach
 

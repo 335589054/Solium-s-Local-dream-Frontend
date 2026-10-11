@@ -65,8 +65,12 @@ fun TagPicker(
     modifier: Modifier = Modifier,
     selectedTags: Set<String> = emptySet(),
 ) {
-    val categories = remember(tags) { tags.map { it.category }.distinct().sorted() }
-    var selectedIndex by rememberSaveable { mutableIntStateOf(0) }
+    val topCategories = remember(tags) {
+        tags.mapNotNull { it.levels.firstOrNull() }.distinct().sorted()
+    }
+    var topIndex by rememberSaveable { mutableIntStateOf(0) }
+    // Full path of the sub-category being viewed; null means the whole top level.
+    var subPath by rememberSaveable { mutableStateOf<String?>(null) }
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -97,17 +101,58 @@ fun TagPicker(
         }
 
         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(categories) { category ->
+            items(topCategories) { category ->
                 FilterChip(
-                    selected = categories.getOrNull(selectedIndex) == category,
-                    onClick = { selectedIndex = categories.indexOf(category) },
+                    selected = topCategories.getOrNull(topIndex) == category,
+                    onClick = {
+                        topIndex = topCategories.indexOf(category)
+                        subPath = null
+                    },
                     label = { Text(category) },
                 )
             }
         }
 
-        val current = categories.getOrNull(selectedIndex.coerceIn(0, categories.lastIndex))
-        val visible = remember(tags, current) { tags.filter { it.category == current } }
+        val currentTop = topCategories.getOrNull(topIndex.coerceIn(0, topCategories.lastIndex))
+        val subCategories = remember(tags, currentTop) {
+            tags.mapNotNull { tag ->
+                val levels = tag.levels
+                if (levels.size >= 2 && levels[0] == currentTop) {
+                    levels.take(2).joinToString("/")
+                } else {
+                    null
+                }
+            }.distinct().sorted()
+        }
+
+        if (subCategories.isNotEmpty()) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                item {
+                    FilterChip(
+                        selected = subPath == null,
+                        onClick = { subPath = null },
+                        label = { Text("全部") },
+                    )
+                }
+                items(subCategories) { full ->
+                    FilterChip(
+                        selected = subPath == full,
+                        onClick = { subPath = full },
+                        label = { Text(full.substringAfter('/')) },
+                    )
+                }
+            }
+        }
+
+        val visible = remember(tags, currentTop, subPath) {
+            when {
+                currentTop == null -> emptyList()
+                subPath != null -> tags.filter { it.category == subPath }
+                else -> tags.filter {
+                    it.category == currentTop || it.category.startsWith("$currentTop/")
+                }
+            }
+        }
 
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 104.dp),

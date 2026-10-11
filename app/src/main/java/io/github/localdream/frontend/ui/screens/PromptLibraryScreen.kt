@@ -1,10 +1,14 @@
 package io.github.localdream.frontend.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,24 +25,25 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -50,6 +55,29 @@ import io.github.localdream.frontend.data.PromptTag
 import io.github.localdream.frontend.data.TagTemplate
 import io.github.localdream.frontend.remote.RemoteModelInfo
 import io.github.localdream.frontend.ui.StudioViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** A pending destructive action awaiting confirmation. */
+private sealed interface Confirm {
+    data class DeleteTags(val tags: List<PromptTag>) : Confirm
+    data class DeleteCategory(val path: String, val count: Int) : Confirm
+    data object ClearAll : Confirm
+}
+
+/**
+ * Decodes an imported file.
+ *
+ * UTF-8 is tried first, but a text file written on Chinese Windows is usually
+ * GBK, which decodes into replacement characters — so seeing any of those means
+ * the file is not UTF-8 and GBK is worth a try.
+ */
+private fun decodeText(bytes: ByteArray): String {
+    val utf8 = String(bytes, Charsets.UTF_8)
+    if ('\uFFFD' !in utf8) return utf8
+    return runCatching { String(bytes, charset("GBK")) }.getOrDefault(utf8)
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -60,20 +88,49 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
     val connection by studio.connectionState.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
 
-    var selectedCategory by remember { mutableIntStateOf(0) }
+    // Browsing path; empty means the top level. Each tap drills one level down.
+    var path by remember { mutableStateOf<List<String>>(emptyList()) }
+    var selecting by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<Set<PromptTag>>(emptySet()) }
+    var confirm by remember { mutableStateOf<Confirm?>(null) }
+
     var importText by remember { mutableStateOf("") }
     var templateCopied by remember { mutableStateOf(false) }
-    var newCategory by remember { mutableStateOf("自定义") }
+    var newCategory by remember { mutableStateOf("") }
     var newZh by remember { mutableStateOf("") }
     var newEn by remember { mutableStateOf("") }
     var comboName by remember { mutableStateOf("") }
     var presetEditing by remember { mutableStateOf<RemoteModelInfo?>(null) }
 
-    val categories = remember(library.tags) { library.categories }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // Pasting a few thousand lines runs into clipboard and text-field limits, so
+    // picking a .txt file is the practical way to load a large library.
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val text = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                            ?.let { decodeText(it) }
+                    }.getOrNull()
+                }
+                if (text.isNullOrBlank()) {
+                    studio.notify("没有读到文件内容")
+                } else {
+                    studio.importTags(text)
+                }
+            }
+        }
+    }
+
+    val currentPath = path.joinToString("/").ifEmpty { null }
 
     LazyColumn(
         Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
@@ -83,6 +140,7 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                 onEdit = { presetEditing = it },
             )
         }
+
         item {
             Card {
                 Column(
@@ -95,13 +153,11 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
-                            clipboard.setText(AnnotatedString(TagTemplate.TEXT))
-                            templateCopied = true
-                        }) {
-                            Text(if (templateCopied) "已复制模板" else "复制模板")
-                        }
+                    Button(onClick = {
+                        clipboard.setText(AnnotatedString(TagTemplate.TEXT))
+                        templateCopied = true
+                    }) {
+                        Text(if (templateCopied) "已复制模板" else "复制模板")
                     }
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -125,6 +181,26 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text("2 · 粘贴 AI 结果并导入", style = MaterialTheme.typography.titleSmall)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedButton(onClick = { studio.importBundledTags() }) {
+                            Text("导入内置词库")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                filePicker.launch(arrayOf("text/*", "application/octet-stream"))
+                            },
+                        ) {
+                            Text("从 txt 文件导入")
+                        }
+                    }
+                    Text(
+                        "内置词库可一键铺满；粘贴框有长度上限时，用 txt 文件导入更省事。两种方式都接受「分类 | 中文 | 英文」每行一条",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     OutlinedTextField(
                         value = importText,
                         onValueChange = { importText = it },
@@ -146,14 +222,14 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                             Text("导入")
                         }
                         OutlinedButton(
-                            onClick = studio::clearTagLibrary,
+                            onClick = { confirm = Confirm.ClearAll },
                             enabled = library.tags.isNotEmpty(),
                         ) {
-                            Text("清空标签")
+                            Text("清空整个标签库")
                         }
                     }
                     Text(
-                        "当前共 ${library.tags.size} 个标签，${library.combos.size} 条收藏",
+                        "导入后自动按分类、再按字母顺序排好；当前共 ${library.tags.size} 个标签，${library.combos.size} 条收藏",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -171,7 +247,7 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                     OutlinedTextField(
                         value = newCategory,
                         onValueChange = { newCategory = it },
-                        label = { Text("分类") },
+                        label = { Text("分类（用 / 分级，如 人物/脸部/眼睛）") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -205,41 +281,26 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
             }
         }
 
-        if (categories.isNotEmpty()) {
+        if (library.tags.isNotEmpty()) {
             item {
-                androidx.compose.material3.PrimaryScrollableTabRow(
-                    selectedTabIndex = selectedCategory.coerceIn(0, categories.lastIndex),
-                    edgePadding = 0.dp,
-                ) {
-                    categories.forEachIndexed { index, category ->
-                        Tab(
-                            selected = index == selectedCategory,
-                            onClick = { selectedCategory = index },
-                            text = { Text(category) },
-                        )
-                    }
-                }
-            }
-            item {
-                val category = categories[selectedCategory.coerceIn(0, categories.lastIndex)]
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "点击标签卡片把英文标签追加到提示词",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        library.tagsIn(category).forEach { tag ->
-                            TagCard(tag = tag, onClick = {
-                                clipboard.setText(AnnotatedString(tag.en))
-                                studio.notify("已复制：${tag.en}")
-                            })
-                        }
-                    }
-                }
+                TagBrowserCard(
+                    library = library,
+                    path = path,
+                    onPathChange = {
+                        path = it
+                        selecting = false
+                        selected = emptySet()
+                    },
+                    selecting = selecting,
+                    selected = selected,
+                    onSelectingChange = { selecting = it },
+                    onSelectedChange = { selected = it },
+                    onTagClick = { tag ->
+                        clipboard.setText(AnnotatedString(tag.en))
+                        studio.notify("已复制：${tag.en}")
+                    },
+                    onDeleteRequest = { confirm = it },
+                )
             }
         }
 
@@ -303,6 +364,242 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
             onDismiss = { presetEditing = null },
         )
     }
+
+    confirm?.let { action ->
+        val title: String
+        val body: String
+        when (action) {
+            is Confirm.DeleteTags -> {
+                title = "删除标签"
+                body = "将删除选中的 ${action.tags.size} 个标签，无法撤销"
+            }
+            is Confirm.DeleteCategory -> {
+                title = "删除分类"
+                body = "将删除「${action.path}」及其所有子分类下的 ${action.count} 个标签，无法撤销"
+            }
+            Confirm.ClearAll -> {
+                title = "清空标签库"
+                body = "将删除全部 ${library.tags.size} 个标签，无法撤销"
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text(title) },
+            text = { Text(body) },
+            confirmButton = {
+                TextButton(onClick = {
+                    when (action) {
+                        is Confirm.DeleteTags -> studio.removeTags(action.tags)
+                        is Confirm.DeleteCategory -> {
+                            studio.removeCategory(action.path)
+                            path = emptyList()
+                        }
+                        Confirm.ClearAll -> studio.clearTagLibrary()
+                    }
+                    selected = emptySet()
+                    selecting = false
+                    confirm = null
+                }) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirm = null }) { Text("取消") }
+            },
+        )
+    }
+}
+
+/**
+ * Walks the category tree one level at a time.
+ *
+ * A branch shows its sub-branches as chips; tags that sit directly on a branch
+ * which also has sub-branches appear below under a `未分类` heading, so nothing
+ * gets hidden by the hierarchy.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TagBrowserCard(
+    library: io.github.localdream.frontend.data.PromptLibrary,
+    path: List<String>,
+    onPathChange: (List<String>) -> Unit,
+    selecting: Boolean,
+    selected: Set<PromptTag>,
+    onSelectingChange: (Boolean) -> Unit,
+    onSelectedChange: (Set<PromptTag>) -> Unit,
+    onTagClick: (PromptTag) -> Unit,
+    onDeleteRequest: (Confirm) -> Unit,
+) {
+    val currentPath = path.joinToString("/").ifEmpty { null }
+    val branches = remember(library.tags, currentPath) { library.subCategoriesOf(currentPath) }
+    val direct = remember(library.tags, currentPath) { library.directTagsOf(currentPath) }
+    val branchCounts = remember(library.tags, currentPath, branches) {
+        branches.associateWith { name ->
+            val full = if (currentPath == null) name else "$currentPath/$name"
+            library.tagsUnder(full).size
+        }
+    }
+    // Everything reachable from here, used by the select-all action.
+    val scopeTags = remember(library.tags, currentPath) {
+        if (currentPath == null) library.tags else library.tagsUnder(currentPath)
+    }
+    val allSelected = scopeTags.isNotEmpty() && selected.containsAll(scopeTags)
+
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("标签库", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.weight(1f))
+                if (currentPath != null) {
+                    TextButton(onClick = {
+                        onDeleteRequest(Confirm.DeleteCategory(currentPath, library.tagsUnder(currentPath).size))
+                    }) {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = null,
+                            modifier = Modifier.width(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("删除本分类")
+                    }
+                }
+            }
+
+            // Breadcrumb
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    "全部",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (path.isEmpty()) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                    modifier = Modifier.clickable { onPathChange(emptyList()) },
+                )
+                path.forEachIndexed { index, level ->
+                    Text("›", style = MaterialTheme.typography.labelMedium)
+                    val last = index == path.lastIndex
+                    Text(
+                        level,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (last) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        modifier = if (last) {
+                            Modifier
+                        } else {
+                            Modifier.clickable { onPathChange(path.take(index + 1)) }
+                        },
+                    )
+                }
+            }
+
+            if (selecting) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("已选 ${selected.size}", style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = {
+                        onSelectedChange(if (allSelected) emptySet() else scopeTags.toSet())
+                    }) {
+                        Text(if (allSelected) "取消全选" else "全选")
+                    }
+                    TextButton(
+                        onClick = { onDeleteRequest(Confirm.DeleteTags(selected.toList())) },
+                        enabled = selected.isNotEmpty(),
+                    ) {
+                        Text("删除选中")
+                    }
+                    TextButton(onClick = {
+                        onSelectingChange(false)
+                        onSelectedChange(emptySet())
+                    }) {
+                        Text("退出")
+                    }
+                }
+            } else {
+                Text(
+                    "点击标签复制，长按进入多选",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            val shown = if (branches.isEmpty() && direct.isEmpty()) {
+                remember(library.tags, currentPath) {
+                    if (currentPath == null) emptyList() else library.tagsIn(currentPath)
+                }
+            } else {
+                direct
+            }
+
+            if (branches.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    branches.forEach { name ->
+                        FilterChip(
+                            selected = false,
+                            onClick = { onPathChange(path + name) },
+                            label = {
+                                Text("$name · ${branchCounts[name] ?: 0}")
+                            },
+                        )
+                    }
+                }
+            }
+
+            if (branches.isNotEmpty() && shown.isNotEmpty()) {
+                Text(
+                    "未分类",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (shown.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    shown.forEach { tag ->
+                        TagCard(
+                            tag = tag,
+                            selected = tag in selected,
+                            onClick = {
+                                if (selecting) {
+                                    onSelectedChange(
+                                        if (tag in selected) selected - tag else selected + tag,
+                                    )
+                                } else {
+                                    onTagClick(tag)
+                                }
+                            },
+                            onLongClick = {
+                                onSelectingChange(true)
+                                onSelectedChange(selected + tag)
+                            },
+                        )
+                    }
+                }
+            } else if (branches.isEmpty()) {
+                Text(
+                    "该分类下暂无标签",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -310,12 +607,25 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
  * underneath, which is what actually gets inserted into the prompt.
  */
 @Composable
-private fun TagCard(tag: PromptTag, onClick: () -> Unit) {
+private fun TagCard(
+    tag: PromptTag,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     Surface(
-        onClick = onClick,
         shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.secondaryContainer
+        },
+        contentColor = if (selected) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSecondaryContainer
+        },
+        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             if (tag.zh.isNotEmpty()) {

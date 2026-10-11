@@ -33,24 +33,59 @@ class PromptLibraryRepository(
             log.warn(TAG, "未能从粘贴内容中解析出标签，请确认每行格式为「分类 | 中文 | 英文」")
             return 0
         }
-        val merged = (_library.value.tags + parsed.tags).distinctBy { it.category to it.en }
-        val added = merged.size - _library.value.tags.size
+        val before = _library.value.tags.size
+        val merged = sortTags((_library.value.tags + parsed.tags).distinctBy { it.category to it.en })
         _library.value = _library.value.copy(tags = merged)
         persist()
+        val added = merged.size - before
         log.info(TAG, "导入标签 $added 条（解析 ${parsed.tags.size} 条，跳过 ${parsed.skipped} 行）")
         return added
+    }
+
+    /**
+     * Installs the starter library that ships inside the APK, so a fresh install
+     * has something to pick from without pasting thousands of lines by hand.
+     */
+    fun importBundledTags(): Int = runCatching {
+        val text = context.assets.open(BUNDLED_TAGS).bufferedReader().use { it.readText() }
+        importTags(text)
+    }.getOrElse {
+        log.error(TAG, "内置标签库读取失败：${it.message}")
+        0
     }
 
     fun addTag(category: String, zh: String, en: String) {
         val english = en.trim()
         if (english.isEmpty()) return
-        val cat = category.trim().ifEmpty { TagListParser.UNCATEGORIZED }
+        val cat = category.trim().replace('／', '/').trim('/').ifEmpty { TagListParser.UNCATEGORIZED }
         if (_library.value.tags.any { it.en == english && it.category == cat }) return
         _library.value = _library.value.copy(
-            tags = _library.value.tags + PromptTag(cat, zh.trim(), english),
+            tags = sortTags(_library.value.tags + PromptTag(cat, zh.trim(), english)),
         )
         persist()
         log.info(TAG, "新增标签：$english（$cat）")
+    }
+
+    /** Deletes the given tags; used by the single- and multi-select actions. */
+    fun removeTags(targets: Collection<PromptTag>) {
+        if (targets.isEmpty()) return
+        val set = targets.toSet()
+        val before = _library.value.tags
+        val next = before.filterNot { it in set }
+        if (next.size == before.size) return
+        _library.value = _library.value.copy(tags = next)
+        persist()
+        log.info(TAG, "删除 ${before.size - next.size} 个标签")
+    }
+
+    /** Deletes a category together with every sub-category beneath it. */
+    fun removeCategory(path: String) {
+        val before = _library.value.tags
+        val next = before.filterNot { it.category == path || it.category.startsWith("$path/") }
+        if (next.size == before.size) return
+        _library.value = _library.value.copy(tags = next)
+        persist()
+        log.info(TAG, "删除分类「$path」下的 ${before.size - next.size} 个标签")
     }
 
     fun clearTags() {
@@ -58,6 +93,10 @@ class PromptLibraryRepository(
         persist()
         log.info(TAG, "已清空标签库")
     }
+
+    /** Keeps the library alphabetical so imported and manual entries interleave. */
+    private fun sortTags(tags: List<PromptTag>): List<PromptTag> =
+        tags.sortedWith(compareBy({ it.category }, { it.en.lowercase() }))
 
     fun addCombo(name: String, positive: String, negative: String) {
         val combo = PromptCombo(
@@ -160,5 +199,6 @@ class PromptLibraryRepository(
 
     private companion object {
         const val TAG = "PromptLibrary"
+        const val BUNDLED_TAGS = "prompt-library.txt"
     }
 }
