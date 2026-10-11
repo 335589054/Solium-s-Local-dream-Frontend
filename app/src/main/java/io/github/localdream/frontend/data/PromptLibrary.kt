@@ -37,6 +37,12 @@ data class PromptCombo(
 data class PromptLibrary(
     val tags: List<PromptTag> = emptyList(),
     val combos: List<PromptCombo> = emptyList(),
+    /**
+     * Full paths of the categories the user has arranged by hand. Categories
+     * missing from this list keep their alphabetical spot, so new imports never
+     * land in a surprising place.
+     */
+    val categoryOrder: List<String> = emptyList(),
 ) {
     /** Top-level categories, alphabetically. */
     val categories: List<String>
@@ -59,15 +65,39 @@ data class PromptLibrary(
         }.distinct().sorted()
     }
 
-    /** Tags sitting exactly on [path], i.e. without a further sub-branch. */
+    /** Full paths of the branches directly under [path], alphabetically. */
+    fun subCategoryPathsOf(path: String?): List<String> {
+        val prefix = if (path.isNullOrBlank()) "" else "$path/"
+        return tags.mapNotNull { tag ->
+            if (!tag.category.startsWith(prefix)) return@mapNotNull null
+            val rest = tag.category.removePrefix(prefix)
+            if (rest.isEmpty()) return@mapNotNull null
+            val name = rest.substringBefore('/')
+            if (name.isEmpty()) null else prefix + name
+        }.distinct().sorted()
+    }
+
+    /**
+     * The branches under [path] as the user arranged them: hand-arranged ones
+     * come first in [categoryOrder], the rest stay alphabetical.
+     */
+    fun orderedSubCategoriesOf(path: String?): List<String> {
+        val paths = subCategoryPathsOf(path)
+        if (categoryOrder.isEmpty()) return paths
+        val rank = categoryOrder.withIndex().associate { (index, value) -> value to index }
+        return paths.sortedBy { rank[it] ?: Int.MAX_VALUE }
+    }
+
+    /** Tags sitting exactly on [path], alphabetically by their English tag. */
     fun directTagsOf(path: String?): List<PromptTag> =
-        if (path.isNullOrBlank()) emptyList() else tags.filter { it.category == path }
+        if (path.isNullOrBlank()) emptyList() else tagsIn(path)
 
     /** Tags on [path] and everything below it. */
     fun tagsUnder(path: String): List<PromptTag> =
         tags.filter { it.category == path || it.category.startsWith("$path/") }
 
-    fun tagsIn(category: String): List<PromptTag> = tags.filter { it.category == category }
+    fun tagsIn(category: String): List<PromptTag> =
+        tags.filter { it.category == category }.sortedBy { it.en.lowercase() }
 
     /** True when opening [path] should show branches, not just a tag grid. */
     fun hasBranches(path: String): Boolean = subCategoriesOf(path).isNotEmpty()
@@ -124,6 +154,25 @@ object TagListParser {
     private val separators = charArrayOf('|', '｜', '\t')
     private val headerWords = setOf("分类", "类别", "category", "cat", "中文", "英文", "chinese", "english")
 
+    /**
+     * Characters that ride along with copy-pasted text and are invisible in the
+     * UI, yet still get tokenised by the backend — a zero-width space or a
+     * non-breaking space is not `Char.isWhitespace`, so `trim()` leaves it in
+     * place and it ends up costing a token in front of the tag.
+     */
+    private const val INVISIBLE = "\u00A0\u200B\u200C\u200D\u2060\u3000\uFEFF"
+
+    /** Drops invisible characters and the whitespace around the field. */
+    fun clean(value: String): String = value.filterNot { it in INVISIBLE }.trim()
+
+    /** A category path: invisible characters gone, every level trimmed. */
+    fun cleanCategory(value: String): String = clean(value)
+        .replace('／', '/')
+        .split('/')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString("/")
+
     data class Parsed(val tags: List<PromptTag>, val skipped: Int)
 
     fun parse(text: String): Parsed {
@@ -134,14 +183,14 @@ object TagListParser {
         // A file saved by a Windows editor often carries a UTF-8 BOM, which
         // would otherwise glue itself onto the first category name.
         text.removePrefix("\uFEFF").lineSequence().forEach { rawLine ->
-            val line = rawLine.trim()
+            val line = clean(rawLine)
             if (line.isEmpty() || line.startsWith("#")) return@forEach
 
-            // Split and trim, but keep empty middle columns: a row such as
+            // Split and clean, but keep empty middle columns: a row such as
             // "分类 |  | blue_eyes" is still a valid three-column entry whose
             // translation is simply missing. Only trailing empties (a stray
             // separator at the end of the line) are dropped.
-            val parts = line.split(*separators).map { it.trim() }.dropLastWhile { it.isEmpty() }
+            val parts = line.split(*separators).map { clean(it) }.dropLastWhile { it.isEmpty() }
             // Drop a header row like "分类 | 中文 | 英文" if the assistant adds one.
             if (parts.isEmpty() || isHeader(parts[0])) return@forEach
 
@@ -150,7 +199,7 @@ object TagListParser {
                 2 -> PromptTag(UNCATEGORIZED, parts[0], parts[1])
                 // Anything past the third column is ignored so stray notes
                 // appended by the assistant do not break parsing.
-                else -> PromptTag(parts[0], parts[1], parts[2])
+                else -> PromptTag(cleanCategory(parts[0]), parts[1], parts[2])
             }
 
             val key = tag.en.ifEmpty { tag.zh }

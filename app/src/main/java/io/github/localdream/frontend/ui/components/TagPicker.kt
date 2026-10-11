@@ -64,9 +64,10 @@ fun TagPicker(
     onPick: (PromptTag) -> Unit,
     modifier: Modifier = Modifier,
     selectedTags: Set<String> = emptySet(),
+    categoryOrder: List<String> = emptyList(),
 ) {
-    val topCategories = remember(tags) {
-        tags.mapNotNull { it.levels.firstOrNull() }.distinct().sorted()
+    val topCategories = remember(tags, categoryOrder) {
+        tags.mapNotNull { it.levels.firstOrNull() }.distinct().sorted().inUserOrder(categoryOrder)
     }
     var topIndex by rememberSaveable { mutableIntStateOf(0) }
     // Full path of the sub-category being viewed; null means the whole top level.
@@ -114,7 +115,7 @@ fun TagPicker(
         }
 
         val currentTop = topCategories.getOrNull(topIndex.coerceIn(0, topCategories.lastIndex))
-        val subCategories = remember(tags, currentTop) {
+        val subCategories = remember(tags, currentTop, categoryOrder) {
             tags.mapNotNull { tag ->
                 val levels = tag.levels
                 if (levels.size >= 2 && levels[0] == currentTop) {
@@ -122,7 +123,7 @@ fun TagPicker(
                 } else {
                     null
                 }
-            }.distinct().sorted()
+            }.distinct().sorted().inUserOrder(categoryOrder)
         }
 
         // No "全部" entry: the first sub-category is active by default, which is
@@ -142,13 +143,15 @@ fun TagPicker(
         }
 
         val visible = remember(tags, currentTop, activeSub) {
-            when {
+            val list = when {
                 currentTop == null -> emptyList()
                 activeSub != null -> tags.filter { it.category == activeSub }
                 else -> tags.filter {
                     it.category == currentTop || it.category.startsWith("$currentTop/")
                 }
             }
+            // Tags always read in alphabetical order, matching the library page.
+            list.sortedBy { it.en.lowercase() }
         }
 
         LazyVerticalGrid(
@@ -223,4 +226,14 @@ private fun TagTile(tag: PromptTag, selected: Boolean, onClick: () -> Unit) {
             }
         }
     }
+}
+
+/**
+ * Applies the category arrangement made on the library page: hand-ordered paths
+ * first, everything else left in the alphabetical order it already had.
+ */
+private fun List<String>.inUserOrder(order: List<String>): List<String> {
+    if (order.isEmpty()) return this
+    val rank = order.withIndex().associate { (index, value) -> value to index }
+    return sortedBy { rank[it] ?: Int.MAX_VALUE }
 }

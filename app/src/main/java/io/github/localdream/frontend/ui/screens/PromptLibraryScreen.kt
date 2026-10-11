@@ -2,10 +2,8 @@ package io.github.localdream.frontend.ui.screens
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -16,17 +14,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -42,25 +38,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.localdream.frontend.data.ModelPreset
 import io.github.localdream.frontend.data.PromptCombo
@@ -68,7 +57,6 @@ import io.github.localdream.frontend.data.PromptTag
 import io.github.localdream.frontend.data.TagTemplate
 import io.github.localdream.frontend.remote.RemoteModelInfo
 import io.github.localdream.frontend.ui.StudioViewModel
-import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -135,7 +123,10 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                 if (text.isNullOrBlank()) {
                     studio.notify("没有读到文件内容")
                 } else {
-                    studio.importTags(text)
+                    val added = studio.importTags(text)
+                    studio.notify(
+                        if (added > 0) "导入完成，新增 $added 条标签" else "没有新增标签，可能都已在库中",
+                    )
                 }
             }
         }
@@ -195,13 +186,13 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                     Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("2 · 粘贴 AI 结果并导入", style = MaterialTheme.typography.titleSmall)
+                    Text("2 · 导入标签", style = MaterialTheme.typography.titleSmall)
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         OutlinedButton(onClick = { confirm = Confirm.ImportBundled }) {
-                            Text("导入内置词库")
+                            Text("用内置词库重置")
                         }
                         OutlinedButton(
                             onClick = {
@@ -212,7 +203,7 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                         }
                     }
                     Text(
-                        "内置词库会覆盖当前标签（收藏不受影响）；粘贴框有长度上限时，用 txt 文件导入更省事。两种方式都接受「分类 | 中文 | 英文」每行一条，并按文件里的先后顺序排列",
+                        "「用内置词库重置」会清空当前标签、换成随包附带的词库（收藏不受影响）。两种导入都按「分类 | 中文 | 英文」每行一条解析，可直接粘贴或选 txt 文件。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -224,27 +215,22 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                         maxLines = 12,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                studio.importTags(importText)
-                                importText = ""
-                            },
-                            enabled = importText.isNotBlank(),
-                        ) {
-                            Icon(Icons.Filled.Download, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("导入")
-                        }
-                        OutlinedButton(
-                            onClick = { confirm = Confirm.ClearAll },
-                            enabled = library.tags.isNotEmpty(),
-                        ) {
-                            Text("清空整个标签库")
-                        }
+                    Button(
+                        onClick = {
+                            val added = studio.importTags(importText)
+                            importText = ""
+                            studio.notify(
+                                if (added > 0) "导入完成，新增 $added 条标签" else "没有新增标签，可能都已在库中",
+                            )
+                        },
+                        enabled = importText.isNotBlank(),
+                    ) {
+                        Icon(Icons.Filled.Download, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("导入粘贴内容")
                     }
                     Text(
-                        "导入按文件里的先后顺序保留 —— 标签文件通常按常用度排列，比字母序更好用；想调整顺序，可在下方标签库进入「排序」拖动。当前共 ${library.tags.size} 个标签，${library.combos.size} 条收藏",
+                        "标签按分类归位，同一分类内一律按英文字母排序。当前共 ${library.tags.size} 个标签，${library.combos.size} 条收藏",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -315,8 +301,8 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                         studio.notify("已复制：${tag.en}")
                     },
                     onDeleteRequest = { confirm = it },
-                    onReorder = { ordered ->
-                        currentPath?.let { studio.reorderTags(it, ordered) }
+                    onMoveCategory = { fullPath, direction ->
+                        studio.moveCategory(fullPath, direction)
                     },
                 )
             }
@@ -386,22 +372,29 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
     confirm?.let { action ->
         val title: String
         val body: String
+        val confirmLabel: String
         when (action) {
             is Confirm.DeleteTags -> {
                 title = "删除标签"
                 body = "将删除选中的 ${action.tags.size} 个标签，无法撤销"
+                confirmLabel = "删除"
             }
             is Confirm.DeleteCategory -> {
                 title = "删除分类"
                 body = "将删除「${action.path}」及其所有子分类下的 ${action.count} 个标签，无法撤销"
+                confirmLabel = "删除"
             }
             Confirm.ImportBundled -> {
-                title = "导入内置词库"
-                body = "将用随包内置的标签库覆盖当前 ${library.tags.size} 个标签，无法撤销；收藏不受影响"
+                title = "用内置词库重置"
+                body = "当前的 ${library.tags.size} 个标签会被全部清空，换成随包附带的内置词库；" +
+                    "已收藏的 ${library.combos.size} 条提示词不受影响。此操作无法撤销。"
+                confirmLabel = "清空并导入"
             }
             Confirm.ClearAll -> {
-                title = "清空标签库"
-                body = "将删除全部 ${library.tags.size} 个标签，无法撤销"
+                title = "清空词库"
+                body = "将清空全部 ${library.tags.size} 个标签，分类顺序也会一并重置，无法撤销；" +
+                    "已收藏的 ${library.combos.size} 条提示词不受影响"
+                confirmLabel = "清空"
             }
         }
         AlertDialog(
@@ -416,14 +409,23 @@ fun PromptLibraryScreen(studio: StudioViewModel) {
                             studio.removeCategory(action.path)
                             path = emptyList()
                         }
-                        Confirm.ImportBundled -> studio.importBundledTags()
-                        Confirm.ClearAll -> studio.clearTagLibrary()
+                        Confirm.ImportBundled -> {
+                            val count = studio.importBundledTags()
+                            studio.notify(
+                                if (count > 0) "已导入内置词库，共 $count 条标签" else "内置词库导入失败",
+                            )
+                        }
+                        Confirm.ClearAll -> {
+                            studio.clearTagLibrary()
+                            studio.notify("词库已清空")
+                        }
                     }
                     selected = emptySet()
                     selecting = false
+                    path = emptyList()
                     confirm = null
                 }) {
-                    Text("删除")
+                    Text(confirmLabel)
                 }
             },
             dismissButton = {
@@ -452,52 +454,54 @@ private fun TagBrowserCard(
     onSelectedChange: (Set<PromptTag>) -> Unit,
     onTagClick: (PromptTag) -> Unit,
     onDeleteRequest: (Confirm) -> Unit,
-    onReorder: (List<PromptTag>) -> Unit,
+    onMoveCategory: (String, Int) -> Unit,
 ) {
     val currentPath = path.joinToString("/").ifEmpty { null }
-    val branches = remember(library.tags, currentPath) { library.subCategoriesOf(currentPath) }
+    // Sub-categories in display order: the user's arrangement first, then
+    // whatever is still alphabetical.
+    val branches = remember(library.tags, currentPath, library.categoryOrder) {
+        library.orderedSubCategoriesOf(currentPath)
+    }
+    val branchNames = remember(branches) { branches.map { it.substringAfterLast('/') } }
     val direct = remember(library.tags, currentPath) { library.directTagsOf(currentPath) }
-    val branchCounts = remember(library.tags, currentPath, branches) {
-        branches.associateWith { name ->
-            val full = if (currentPath == null) name else "$currentPath/$name"
-            library.tagsUnder(full).size
-        }
+    val branchCounts = remember(library.tags, branches) {
+        branches.associateWith { library.tagsUnder(it).size }
     }
     // Everything reachable from here, used by the select-all action.
     val scopeTags = remember(library.tags, currentPath) {
         if (currentPath == null) library.tags else library.tagsUnder(currentPath)
     }
     val allSelected = scopeTags.isNotEmpty() && selected.containsAll(scopeTags)
-    // Reordering is per category: a flat list of the whole library would be
-    // unusable, and the browse path already scopes things down nicely.
-    var reordering by remember { mutableStateOf(false) }
+    // Sorting is per level, one category per row: the simplest thing that works
+    // and needs no drag maths. The tags inside a category are always listed
+    // alphabetically, so they are not sortable.
+    var sorting by remember { mutableStateOf(false) }
 
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("标签库", style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.weight(1f))
-                if (currentPath != null) {
-                    TextButton(onClick = {
-                        reordering = !reordering
-                        if (reordering) {
-                            onSelectingChange(false)
-                            onSelectedChange(emptySet())
-                        }
-                    }) {
-                        Text(if (reordering) "完成" else "排序")
+                TextButton(onClick = {
+                    sorting = !sorting
+                    if (sorting) {
+                        onSelectingChange(false)
+                        onSelectedChange(emptySet())
                     }
-                    TextButton(onClick = {
-                        onDeleteRequest(Confirm.DeleteCategory(currentPath, library.tagsUnder(currentPath).size))
-                    }) {
-                        Icon(
-                            Icons.Filled.Delete,
-                            contentDescription = null,
-                            modifier = Modifier.width(16.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("删除本分类")
-                    }
+                }) {
+                    Text(if (sorting) "完成" else "排序分类")
+                }
+                TextButton(
+                    onClick = { onDeleteRequest(Confirm.ClearAll) },
+                    enabled = library.tags.isNotEmpty(),
+                ) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.width(16.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("清空词库")
                 }
             }
 
@@ -534,6 +538,19 @@ private fun TagBrowserCard(
                         },
                     )
                 }
+                Spacer(Modifier.weight(1f))
+                if (currentPath != null) {
+                    TextButton(onClick = {
+                        onDeleteRequest(
+                            Confirm.DeleteCategory(currentPath, library.tagsUnder(currentPath).size),
+                        )
+                    }) {
+                        Text(
+                            "删除本分类",
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
             }
 
             if (selecting) {
@@ -561,9 +578,9 @@ private fun TagBrowserCard(
                         Text("退出")
                     }
                 }
-            } else if (reordering) {
+            } else if (sorting) {
                 Text(
-                    "长按任意一行上下拖动调整顺序，松手即保存",
+                    "用 ↑ ↓ 调整下面这些分类的先后顺序，点「完成」退出；分类里的标签固定按英文字母排",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -575,171 +592,102 @@ private fun TagBrowserCard(
                 )
             }
 
-            val shown = if (branches.isEmpty() && direct.isEmpty()) {
-                remember(library.tags, currentPath) {
-                    if (currentPath == null) emptyList() else library.tagsIn(currentPath)
+            val shown = direct
+
+            if (sorting) {
+                if (branches.isEmpty()) {
+                    Text(
+                        "这一层没有子分类可以排序，点面包屑回到上一层试试",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    branches.forEachIndexed { index, full ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    branchNames[index],
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(
+                                    "${branchCounts[full] ?: 0} 个标签",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(
+                                onClick = { onMoveCategory(full, -1) },
+                                enabled = index > 0,
+                            ) {
+                                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "上移")
+                            }
+                            IconButton(
+                                onClick = { onMoveCategory(full, 1) },
+                                enabled = index < branches.lastIndex,
+                            ) {
+                                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "下移")
+                            }
+                        }
+                    }
                 }
             } else {
-                direct
-            }
-
-            if (branches.isNotEmpty()) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    branches.forEach { name ->
-                        FilterChip(
-                            selected = false,
-                            onClick = { onPathChange(path + name) },
-                            label = {
-                                Text("$name · ${branchCounts[name] ?: 0}")
-                            },
-                        )
+                if (branches.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        branches.forEachIndexed { index, full ->
+                            FilterChip(
+                                selected = false,
+                                onClick = { onPathChange(path + branchNames[index]) },
+                                label = {
+                                    Text("${branchNames[index]} · ${branchCounts[full] ?: 0}")
+                                },
+                            )
+                        }
                     }
                 }
-            }
 
-            if (branches.isNotEmpty() && shown.isNotEmpty()) {
-                Text(
-                    "未分类",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            if (shown.isNotEmpty() && reordering) {
-                TagReorderList(
-                    tags = shown,
-                    onCommit = onReorder,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 320.dp),
-                )
-            } else if (shown.isNotEmpty()) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    shown.forEach { tag ->
-                        TagCard(
-                            tag = tag,
-                            selected = tag in selected,
-                            onClick = {
-                                if (selecting) {
-                                    onSelectedChange(
-                                        if (tag in selected) selected - tag else selected + tag,
-                                    )
-                                } else {
-                                    onTagClick(tag)
-                                }
-                            },
-                            onLongClick = {
-                                onSelectingChange(true)
-                                onSelectedChange(selected + tag)
-                            },
-                        )
-                    }
-                }
-            } else if (branches.isEmpty()) {
-                Text(
-                    "该分类下暂无标签",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-/**
- * A vertical list whose rows can be dragged into a new order with a long press.
- *
- * The rows all share the same height so the drop target can be worked out from
- * the drag distance alone. Reordering happens on a local copy and is only
- * written back when the finger lifts, which keeps the persisted library from
- * flickering through every intermediate state.
- */
-@Composable
-private fun TagReorderList(
-    tags: List<PromptTag>,
-    onCommit: (List<PromptTag>) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val items = remember(tags) { tags.toMutableStateList() }
-    val rowHeightPx = with(LocalDensity.current) { REORDER_ROW_HEIGHT.toPx() }
-    var dragIndex by remember { mutableIntStateOf(-1) }
-    var dragOffset by remember { mutableFloatStateOf(0f) }
-
-    LazyColumn(modifier = modifier, state = rememberLazyListState()) {
-        itemsIndexed(items, key = { _, tag -> "${tag.category}|${tag.en}" }) { index, tag ->
-            val dragging = index == dragIndex
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(REORDER_ROW_HEIGHT)
-                    .zIndex(if (dragging) 1f else 0f)
-                    .graphicsLayer { translationY = if (dragging) dragOffset else 0f }
-                    .background(
-                        if (dragging) {
-                            MaterialTheme.colorScheme.surfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.surface
-                        },
-                    )
-                    .pointerInput(Unit) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = {
-                                // Look the row up by identity rather than trusting
-                                // the index captured when this modifier was built.
-                                val start = items.indexOfFirst {
-                                    it.category == tag.category && it.en == tag.en
-                                }
-                                if (start >= 0) {
-                                    dragIndex = start
-                                    dragOffset = 0f
-                                }
-                            },
-                            onDrag = { change, amount ->
-                                change.consume()
-                                dragOffset += amount.y
-                                val steps = (dragOffset / rowHeightPx).roundToInt()
-                                if (steps != 0 && dragIndex >= 0) {
-                                    val target = (dragIndex + steps).coerceIn(0, items.lastIndex)
-                                    if (target != dragIndex) {
-                                        items.add(target, items.removeAt(dragIndex))
-                                        dragIndex = target
-                                        dragOffset -= steps * rowHeightPx
-                                    }
-                                }
-                            },
-                            onDragEnd = {
-                                dragIndex = -1
-                                dragOffset = 0f
-                                onCommit(items.toList())
-                            },
-                            onDragCancel = {
-                                dragIndex = -1
-                                dragOffset = 0f
-                            },
-                        )
-                    },
-            ) {
-                Icon(
-                    Icons.Filled.DragHandle,
-                    contentDescription = "拖动排序",
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Column(Modifier.weight(1f)) {
-                    if (tag.zh.isNotEmpty()) {
-                        Text(tag.zh, style = MaterialTheme.typography.bodyMedium)
-                    }
+                if (branches.isNotEmpty() && shown.isNotEmpty()) {
                     Text(
-                        tag.en,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
+                        "未分类",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                if (shown.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        shown.forEach { tag ->
+                            TagCard(
+                                tag = tag,
+                                selected = tag in selected,
+                                onClick = {
+                                    if (selecting) {
+                                        onSelectedChange(
+                                            if (tag in selected) selected - tag else selected + tag,
+                                        )
+                                    } else {
+                                        onTagClick(tag)
+                                    }
+                                },
+                                onLongClick = {
+                                    onSelectingChange(true)
+                                    onSelectedChange(selected + tag)
+                                },
+                            )
+                        }
+                    }
+                } else if (branches.isEmpty()) {
+                    Text(
+                        "该分类下暂无标签",
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -747,9 +695,6 @@ private fun TagReorderList(
         }
     }
 }
-
-/** Fixed row height for [TagReorderList]; the drag maths assumes it. */
-private val REORDER_ROW_HEIGHT = 56.dp
 
 /**
  * A tag shows both attributes — the Chinese gloss on top and the English tag

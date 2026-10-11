@@ -33,14 +33,19 @@ class PromptLibraryRepository(
             log.warn(TAG, "未能从粘贴内容中解析出标签，请确认每行格式为「分类 | 中文 | 英文」")
             return 0
         }
-        val before = _library.value.tags.size
-        // Keep the incoming order: tag files are normally sorted by how common
-        // each tag is, which is more useful than alphabetical.
-        val merged = (_library.value.tags + parsed.tags).distinctBy { it.category to it.en }
+        val before = _library.value.tags
+        val beforeKeys = before.map { it.category to it.en }.toSet()
+        // The incoming row wins over the stored one: a tag that was saved with a
+        // stray space or a wrong translation has to be fixable by importing a
+        // corrected file, which a plain merge would silently refuse to do.
+        val incoming = parsed.tags.map { it.category to it.en }.toSet()
+        val kept = before.filterNot { (it.category to it.en) in incoming }
+        val merged = kept + parsed.tags
         _library.value = _library.value.copy(tags = merged)
         persist()
-        val added = merged.size - before
-        log.info(TAG, "导入标签 $added 条（解析 ${parsed.tags.size} 条，跳过 ${parsed.skipped} 行）")
+        val added = merged.count { (it.category to it.en) !in beforeKeys }
+        val updated = parsed.tags.size - added
+        log.info(TAG, "导入标签：新增 $added 条、更新 $updated 条（跳过 ${parsed.skipped} 行）")
         return added
     }
 
@@ -70,12 +75,12 @@ class PromptLibraryRepository(
     }
 
     fun addTag(category: String, zh: String, en: String) {
-        val english = en.trim()
+        val english = TagListParser.clean(en)
         if (english.isEmpty()) return
-        val cat = category.trim().replace('／', '/').trim('/').ifEmpty { TagListParser.UNCATEGORIZED }
+        val cat = TagListParser.cleanCategory(category).ifEmpty { TagListParser.UNCATEGORIZED }
         if (_library.value.tags.any { it.en == english && it.category == cat }) return
         _library.value = _library.value.copy(
-            tags = _library.value.tags + PromptTag(cat, zh.trim(), english),
+            tags = _library.value.tags + PromptTag(cat, TagListParser.clean(zh), english),
         )
         persist()
         log.info(TAG, "新增标签：$english（$cat）")
@@ -104,29 +109,38 @@ class PromptLibraryRepository(
     }
 
     fun clearTags() {
-        _library.value = _library.value.copy(tags = emptyList())
+        _library.value = _library.value.copy(tags = emptyList(), categoryOrder = emptyList())
         persist()
         log.info(TAG, "已清空标签库")
     }
 
     /**
-     * Writes back a user-arranged order for the tags that sit directly in one
-     * category. The reordered list keeps the same slots in the global list, so
-     * tags belonging to other categories never move.
+     * Moves one category up or down among the categories that share its parent.
+     *
+     * Categories are the only thing with a hand-arranged order — the tags
+     * inside a category always fall back to alphabetical, which is predictable
+     * and needs no juggling.
      */
-    fun reorderCategory(path: String, reordered: List<PromptTag>) {
-        val before = _library.value.tags
-        val slots = before.indices.filter { before[it].category == path }
-        if (slots.size != reordered.size) {
-            log.warn(TAG, "排序结果与「$path」的标签数不一致，已忽略")
-            return
-        }
-        val next = before.toMutableList()
-        slots.forEachIndexed { i, slot -> next[slot] = reordered[i] }
-        if (next == before) return
-        _library.value = _library.value.copy(tags = next)
+    fun moveCategory(fullPath: String, direction: Int) {
+        val parent = fullPath.substringBeforeLast('/', "").ifEmpty { null }
+        val siblings = _library.value.orderedSubCategoriesOf(parent)
+        val index = siblings.indexOf(fullPath)
+        if (index < 0) return
+        val target = index + direction
+        if (target !in siblings.indices) return
+
+        // Seed the order with every sibling in the order they are shown right
+        // now, otherwise swapping two still-unranked names would be a no-op.
+        val order = _library.value.categoryOrder.toMutableList()
+        siblings.forEach { if (it !in order) order.add(it) }
+        val a = order.indexOf(siblings[index])
+        val b = order.indexOf(siblings[target])
+        order[a] = siblings[target]
+        order[b] = siblings[index]
+
+        _library.value = _library.value.copy(categoryOrder = order)
         persist()
-        log.info(TAG, "「$path」的标签顺序已更新")
+        log.info(TAG, "「$fullPath」上移/下移一位")
     }
 
     fun addCombo(name: String, positive: String, negative: String) {
@@ -157,8 +171,24 @@ class PromptLibraryRepository(
 
     private fun load(): PromptLibrary = runCatching {
         if (!file.exists()) return PromptLibrary()
-        decode(file.readText())
+        decode(file.readText()).cleaned()
     }.getOrElse { PromptLibrary() }
+
+    /**
+     * Repairs libraries written by an older build, which stored whatever
+     * character the pasted text carried — a leading zero-width or non-breaking
+     * space used to survive into every generated prompt.
+     */
+    private fun PromptLibrary.cleaned(): PromptLibrary {
+        val fixed = tags.map {
+            PromptTag(
+                category = TagListParser.cleanCategory(it.category),
+                zh = TagListParser.clean(it.zh),
+                en = TagListParser.clean(it.en),
+            )
+        }.filter { it.en.isNotEmpty() }
+        return if (fixed == tags) this else copy(tags = fixed.distinctBy { it.category to it.en })
+    }
 
     private fun encode(library: PromptLibrary): String = JSONObject().apply {
         put(
@@ -189,6 +219,7 @@ class PromptLibraryRepository(
                 }
             },
         )
+        put("categoryOrder", JSONArray(library.categoryOrder))
     }.toString()
 
     private fun decode(text: String): PromptLibrary {
@@ -225,7 +256,14 @@ class PromptLibraryRepository(
                 )
             }
         }
-        return PromptLibrary(tags, combos)
+        val order = mutableListOf<String>()
+        json.optJSONArray("categoryOrder")?.let { array ->
+            for (i in 0 until array.length()) {
+                val path = array.optString(i)
+                if (path.isNotEmpty()) order.add(path)
+            }
+        }
+        return PromptLibrary(tags, combos, categoryOrder = order)
     }
 
     private companion object {

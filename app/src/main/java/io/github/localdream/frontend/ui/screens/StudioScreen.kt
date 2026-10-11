@@ -316,6 +316,7 @@ private fun ControlColumn(
                     PromptTarget.POSITIVE -> state.positiveTokens.map { it.en }.toSet()
                     PromptTarget.NEGATIVE -> state.negativeTokens.map { it.en }.toSet()
                 },
+                categoryOrder = library.categoryOrder,
             )
         }
     }
